@@ -71,6 +71,10 @@
 #include <string>
 #include <vector>
 
+#ifdef GGML_CUDA_NO_TURING_MMA
+#define CUBLAS_COMPUTE_16F CUBLAS_COMPUTE_16F_PEDANTIC
+#endif
+
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
 [[noreturn]]

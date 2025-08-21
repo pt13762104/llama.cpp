@@ -77,6 +77,11 @@ if (CUDAToolkit_FOUND)
         add_compile_definitions(GGML_CUDA_FORCE_CUBLAS)
     endif()
 
+    if (GGML_CUDA_NO_TURING_MMA)
+        add_compile_definitions(GGML_CUDA_NO_TURING_MMA)
+        add_compile_definitions(GGML_CUDA_FORCE_MMQ)
+    endif()
+
     if (GGML_CUDA_NO_VMM)
         add_compile_definitions(GGML_CUDA_NO_VMM)
     endif()
