@@ -261,6 +261,9 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
         GGML_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s\n",
                         id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no");
+        if (ggml_cuda_highest_compiled_arch(info.devices[id].cc) >= GGML_CUDA_CC_TURING && info.devices[id].nsm <= 24 && info.devices[id].cc == 750)
+            GGML_LOG_INFO("Turing without tensor cores detected. Please compile with different options (e.g. `-DCMAKE_CUDA_ARCHITECTURES=61 -DGGML_CUDA_FORCE_MMQ=1`) for better performance.\n");
+
 #endif // defined(GGML_USE_HIP)
     }
 
