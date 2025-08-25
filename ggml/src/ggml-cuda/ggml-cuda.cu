@@ -204,6 +204,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
     GGML_LOG_INFO("%s: GGML_CUDA_FORCE_CUBLAS: no\n", __func__);
 #endif // GGML_CUDA_FORCE_CUBLAS
     GGML_LOG_INFO("%s: found %d " GGML_CUDA_NAME " devices:\n", __func__, info.device_count);
+
     std::vector<std::pair<int, std::string>> affected_devices;
     for (int id = 0; id < info.device_count; ++id) {
         int device_vmm = 0;
@@ -274,6 +275,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
         }
 #endif  // defined(GGML_USE_HIP)
     }
+
     if (ggml_cuda_highest_compiled_arch(GGML_CUDA_CC_TURING) >= GGML_CUDA_CC_TURING && affected_devices.size()) {
         GGML_LOG_INFO("These devices will have affected performance due to lack of tensor cores:\n");
         for (size_t affected_id = 0; affected_id < affected_devices.size(); affected_id++) {
@@ -284,6 +286,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
             "If you don't plan to use other devices, consider compiling with different options (e.g. "
             "`-DCMAKE_CUDA_ARCHITECTURES=61 -DGGML_CUDA_FORCE_MMQ=1`) for better performance.\n");
     }
+
     for (int id = 0; id < info.device_count; ++id) {
         info.default_tensor_split[id] /= total_vram;
     }
