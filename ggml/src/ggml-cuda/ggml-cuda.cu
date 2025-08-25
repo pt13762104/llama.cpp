@@ -204,6 +204,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
     GGML_LOG_INFO("%s: GGML_CUDA_FORCE_CUBLAS: no\n", __func__);
 #endif // GGML_CUDA_FORCE_CUBLAS
     GGML_LOG_INFO("%s: found %d " GGML_CUDA_NAME " devices:\n", __func__, info.device_count);
+    std::vector<std::pair<int, std::string>> affected_devices;
     for (int id = 0; id < info.device_count; ++id) {
         int device_vmm = 0;
 
@@ -261,12 +262,28 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
         GGML_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s\n",
                         id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no");
-        if (ggml_cuda_highest_compiled_arch(info.devices[id].cc) >= GGML_CUDA_CC_TURING && info.devices[id].nsm <= 24 && info.devices[id].cc == 750)
-            GGML_LOG_INFO("Turing without tensor cores detected. Please compile with different options (e.g. `-DCMAKE_CUDA_ARCHITECTURES=61 -DGGML_CUDA_FORCE_MMQ=1`) for better performance.\n");
-
-#endif // defined(GGML_USE_HIP)
+        std::string device_name(prop.name);
+        if (device_name == "NVIDIA GeForce MX450") {
+            affected_devices.push_back({ id, device_name });
+        }
+        if (device_name == "NVIDIA GeForce MX550") {
+            affected_devices.push_back({ id, device_name });
+        }
+        if (device_name.substr(0, 21) == "NVIDIA GeForce GTX 16") {
+            affected_devices.push_back({ id, device_name });
+        }
+#endif  // defined(GGML_USE_HIP)
     }
-
+    if (ggml_cuda_highest_compiled_arch(GGML_CUDA_CC_TURING) >= GGML_CUDA_CC_TURING && affected_devices.size()) {
+        GGML_LOG_INFO("These devices will have affected performance due to lack of tensor cores:\n");
+        for (size_t affected_id = 0; affected_id < affected_devices.size(); affected_id++) {
+            GGML_LOG_INFO(
+                "  Device %d: %s\n", affected_devices[affected_id].first, affected_devices[affected_id].second.c_str());
+        }
+        GGML_LOG_INFO(
+            "If you don't plan to use other devices, consider compiling with different options (e.g. "
+            "`-DCMAKE_CUDA_ARCHITECTURES=61 -DGGML_CUDA_FORCE_MMQ=1`) for better performance.\n");
+    }
     for (int id = 0; id < info.device_count; ++id) {
         info.default_tensor_split[id] /= total_vram;
     }
