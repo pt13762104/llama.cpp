@@ -265,20 +265,20 @@ static ggml_cuda_device_info ggml_cuda_init() {
                         id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no");
         std::string device_name(prop.name);
         if (device_name == "NVIDIA GeForce MX450") {
-            affected_devices.push_back({ id, device_name });
+            turing_devices_without_mma.push_back({ id, device_name });
         } else if (device_name == "NVIDIA GeForce MX550") {
-            affected_devices.push_back({ id, device_name });
+            turing_devices_without_mma.push_back({ id, device_name });
         } else if (device_name.substr(0, 21) == "NVIDIA GeForce GTX 16") {
-            affected_devices.push_back({ id, device_name });
+            turing_devices_without_mma.push_back({ id, device_name });
         }
 #endif  // defined(GGML_USE_HIP)
     }
 
     if (ggml_cuda_highest_compiled_arch(GGML_CUDA_CC_TURING) >= GGML_CUDA_CC_TURING && !turing_devices_without_mma.empty()) {
         GGML_LOG_INFO("The following devices will have suboptimal performance due to a lack of tensor cores:\n");
-        for (size_t affected_id = 0; affected_id < affected_devices.size(); affected_id++) {
+        for (size_t device_pos = 0; device_pos < turing_devices_without_mma.size(); device_pos++) {
             GGML_LOG_INFO(
-                "  Device %d: %s\n", affected_devices[affected_id].first, affected_devices[affected_id].second.c_str());
+                "  Device %d: %s\n", turing_devices_without_mma[device_pos].first, turing_devices_without_mma[device_pos].second.c_str());
         }
         GGML_LOG_INFO(
             "Consider compiling with CMAKE_CUDA_ARCHITECTURES=61-virtual;80-virtual and DGGML_CUDA_FORCE_MMQ to force the use of the Pascal code for Turing.\n");
