@@ -380,12 +380,9 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % (2*warp_size) == 0;
-#ifdef GGML_CUDA_NO_TURING_MMA
-    if (K->ne[0] != 64 && K->ne[0] != 128 && turing_mma_available(cc)) {
-#else
     // If Turing tensor cores available, use them except for some cases with batch size 1:
     if (turing_mma_available(cc)) {
-#endif
+
         const bool gqa_opt_applies = gqa_ratio % 2 == 0 && mask; // The mma-based kernels have GQA-specific optimizations
         const bool mma_needs_data_conversion = K->type != GGML_TYPE_F16 || V->type != GGML_TYPE_F16;
         const bool mma_faster_for_rtx4000 = Q->ne[3] > 1 || (gqa_ratio > 4 && K->ne[1] >= 8192);

@@ -72,8 +72,9 @@
 #include <string>
 #include <vector>
 
-#ifdef GGML_CUDA_NO_TURING_MMA
+#if (defined(GGML_CUDA_NO_TURING_MMA) && __CUDA_ARCH__ == GGML_CUDA_CC_TURING)
 #define CUBLAS_COMPUTE_16F CUBLAS_COMPUTE_16F_PEDANTIC
+#define CUBLAS_GEMM_DEFAULT_TENSOR_OP CUBLAS_GEMM_DEFAULT
 #endif
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
