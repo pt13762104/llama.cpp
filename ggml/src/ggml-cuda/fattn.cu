@@ -380,9 +380,9 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % (2*warp_size) == 0;
+
     // If Turing tensor cores available, use them except for some cases with batch size 1:
     if (turing_mma_available(cc)) {
-
         const bool gqa_opt_applies = gqa_ratio % 2 == 0 && mask; // The mma-based kernels have GQA-specific optimizations
         const bool mma_needs_data_conversion = K->type != GGML_TYPE_F16 || V->type != GGML_TYPE_F16;
         const bool mma_faster_for_rtx4000 = Q->ne[3] > 1 || (gqa_ratio > 4 && K->ne[1] >= 8192);
@@ -396,6 +396,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         }
         return BEST_FATTN_KERNEL_MMA_F16;
     }
+
     // Use kernels specializes for small batch sizes if possible:
     if (Q->ne[1] <= 8 && can_use_vector_kernel) {
         if (prec == GGML_PREC_DEFAULT && fast_fp16_available(cc)) {
@@ -403,6 +404,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         }
         return BEST_FATTN_KERNEL_VEC_F32;
     }
+
 #ifndef GGML_CUDA_NO_TURING_MMA
     // For large batch sizes, use the WMMA kernel if possible:
     if (fp16_mma_available(cc)) {

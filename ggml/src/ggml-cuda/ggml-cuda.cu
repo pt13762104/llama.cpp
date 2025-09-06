@@ -265,11 +265,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
         GGML_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s\n",
                         id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no");
         std::string device_name(prop.name);
-        if (device_name == "NVIDIA GeForce MX450") {
-            turing_devices_without_mma.push_back({ id, device_name });
-        } else if (device_name == "NVIDIA GeForce MX550") {
-            turing_devices_without_mma.push_back({ id, device_name });
-        } else if (device_name.substr(0, 21) == "NVIDIA GeForce GTX 16") {
+        if (info.devices[id].nsm <= 24 && info.devices[id].cc == 750) {
             turing_devices_without_mma.push_back({ id, device_name });
         }
 #endif  // defined(GGML_USE_HIP)
@@ -282,7 +278,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
                 "  Device %d: %s\n", turing_devices_without_mma[device_pos].first, turing_devices_without_mma[device_pos].second.c_str());
         }
         GGML_LOG_INFO(
-            "Consider compiling with CMAKE_CUDA_ARCHITECTURES=61-virtual;80-virtual and DGGML_CUDA_FORCE_MMQ to force the use of the Pascal code for Turing.\n");
+            "Consider compiling with -DGGML_CUDA_NO_TURING_MMA=1 to disable the use of the MMA code for Turing.\n");
     }
 
     for (int id = 0; id < info.device_count; ++id) {
