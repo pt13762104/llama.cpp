@@ -73,9 +73,6 @@
 #include <string>
 #include <vector>
 
-
-
-
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
 [[noreturn]]
