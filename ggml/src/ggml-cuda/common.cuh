@@ -230,7 +230,7 @@ static const char * cu_get_error_str(CUresult err) {
 #define AMD_MFMA_AVAILABLE
 #endif // defined(GGML_USE_HIP) && defined(CDNA) && !defined(GGML_HIP_NO_MMQ_MFMA)
 
-#if (!defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING) && (!defined(GGML_CUDA_NO_TURING_MMA) || __CUDA_ARCH__ != GGML_CUDA_CC_TURING)
+#if (!defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING) && (!defined(GGML_CUDA_NO_TURING_MMA) || __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE)
 #define TURING_MMA_AVAILABLE
 #endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
 
@@ -260,7 +260,7 @@ static bool fast_fp16_available(const int cc) {
 
 // To be used for feature selection of external libraries, e.g. cuBLAS.
 static bool fast_fp16_hardware_available(const int cc) {
-    return (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_PASCAL && cc != 610 && (!GGML_CUDA_NO_TURING_MMA || cc >= GGML_CUDA_CC_AMPERE)) || GGML_CUDA_CC_IS_AMD(cc) ||
+    return (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_PASCAL && cc != 610 && (!GGML_CUDA_NO_TURING_MMA || cc != GGML_CUDA_CC_TURING)) || GGML_CUDA_CC_IS_AMD(cc) ||
         (GGML_CUDA_CC_IS_MTHREADS(cc) && cc >= GGML_CUDA_CC_QY2);
 }
 
@@ -269,7 +269,7 @@ static bool fp16_mma_available(const int cc) {
 #if defined(GGML_USE_HIP) && !defined(GGML_HIP_ROCWMMA_FATTN)
     return false;
 #else
-    if ((GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA && (!GGML_CUDA_NO_TURING_MMA || cc >= GGML_CUDA_CC_AMPERE)) ||
+    if ((GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA && (!GGML_CUDA_NO_TURING_MMA || cc != GGML_CUDA_CC_TURING)) ||
         GGML_CUDA_CC_IS_CDNA(cc) || GGML_CUDA_CC_IS_RDNA3(cc) ||
         GGML_CUDA_CC_IS_MTHREADS(cc)) {
         return true;
@@ -287,7 +287,7 @@ static bool fp16_mma_available(const int cc) {
 
 // To be used for feature selection of external libraries, e.g. cuBLAS.
 static bool fp16_mma_hardware_available(const int cc) {
-    return (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_VOLTA && (!GGML_CUDA_NO_TURING_MMA || cc >= GGML_CUDA_CC_AMPERE)) ||
+    return (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_VOLTA && (!GGML_CUDA_NO_TURING_MMA || cc != GGML_CUDA_CC_TURING)) ||
         GGML_CUDA_CC_IS_CDNA(cc) || GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc) ||
         (GGML_CUDA_CC_IS_MTHREADS(cc) && cc >= GGML_CUDA_CC_QY2);
 }

@@ -405,12 +405,11 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_VEC_F32;
     }
 
-#ifndef GGML_CUDA_NO_TURING_MMA
     // For large batch sizes, use the WMMA kernel if possible:
     if (fp16_mma_available(cc)) {
         return BEST_FATTN_KERNEL_WMMA_F16;
     }
-#endif
+
     // If there is no suitable kernel for tensor cores or small batch sizes, use the generic kernel for large batch sizes:
     if (prec == GGML_PREC_DEFAULT && fast_fp16_available(cc)) {
         return BEST_FATTN_KERNEL_TILE_F16;
