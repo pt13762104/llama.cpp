@@ -6976,7 +6976,7 @@ int main(int argc, char ** argv) {
             continue;
         }
 
-        if (backend_filter == NULL && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU && mode != MODE_GRAD) {
+        if (backend_filter == NULL && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU && mode == MODE_GRAD) {
             output_printer->print_backend_init(backend_init_info(
                 i, ggml_backend_dev_count(), ggml_backend_dev_name(dev), true, "Skipping CPU backend"));
             n_ok++;
