@@ -31,11 +31,10 @@ static int fattn_tile_get_kq_stride_host(const int D, const int ncols, const int
                 return -1;
         }
     }
-    if (fast_fp16_available(cc) && cc != GGML_CUDA_CC_TURING) {
+    if (fast_fp16_available(cc)) {
         switch (D) {
             case 64:
             case 128:
-                return 128;
             case 256:
                 return ncols <= 16 ? 128 : 64;
             default:
@@ -82,11 +81,10 @@ static constexpr __device__ int fattn_tile_get_kq_stride_device(int D, int ncols
     }
 #endif // RDNA
 #else
-#if defined(FAST_FP16_AVAILABLE) && __CUDA_ARCH__ != GGML_CUDA_CC_TURING
+#ifdef FAST_FP16_AVAILABLE
     switch (D) {
         case 64:
         case 128:
-            return 128;
         case 256:
             return ncols <= 16 ? 128 : 64;
         default:
@@ -120,7 +118,7 @@ static constexpr __device__ int fattn_tile_get_kq_nbatch_device(int D, int ncols
             return -1;
     }
 #else
-#if defined(FAST_FP16_AVAILABLE) && __CUDA_ARCH__ != GGML_CUDA_CC_TURING
+#ifdef FAST_FP16_AVAILABLE
     switch (D) {
         case 64:
             return 64;
