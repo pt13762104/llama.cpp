@@ -1,3 +1,5 @@
+#pragma once
+
 #include "common.cuh"
 
 #if ((!defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA) || defined(GGML_USE_MUSA)) && (!defined(GGML_CUDA_NO_TURING_MMA) || __CUDA_ARCH__ != GGML_CUDA_CC_TURING)
