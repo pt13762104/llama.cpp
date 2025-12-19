@@ -772,6 +772,11 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
         }
         auto opt = *arg_to_options[arg];
         std::string val;
+        if (opt.value_hint == nullptr && opt.value_hint_2 == nullptr) {
+            // bool arg (need to reverse the meaning for negative args)
+            bool is_neg = std::find(opt.args_neg.begin(), opt.args_neg.end(), arg) != opt.args_neg.end();
+            val = is_neg ? "0" : "1";
+        }
         if (opt.value_hint != nullptr) {
             // arg with single value
             check_arg(i);
@@ -1196,7 +1201,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.system_prompt = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_DIFFUSION}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_DIFFUSION, LLAMA_EXAMPLE_MTMD}));
     add_opt(common_arg(
         {"--perf"},
         {"--no-perf"},
