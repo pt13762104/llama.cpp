@@ -1,4 +1,7 @@
-### This is a special testing branch for random things that I test. It includes an option, `GGML_CUDA_NO_TURING_MMA`, which makes Turing devices appears as if tensor cores don't exist. DO NOT USE THIS OPTION UNLESS YOU ARE AFFECTED (GTX 16 series, etc.)
+### This is a special testing branch for random things that I test. It includes an option, `GGML_CUDA_NO_TURING_MMA`, which makes Turing devices appears as if tensor cores don't exist.
+
+### It's recommended to enable this option if you only have GTX 16 cards, or GTX 16 cards with other non-Turing cards. Do not use this option if you only have RTX 20 series cards. It's up to your choice to enable this option while using both RTX 20 and GTX 16 cards. This option does nothing if you don't have Turing cards. (GTX 16 refers to any TU11x card, including e.g. T1000. RTX 20 refers to any TU10x card.)
+
 # llama.cpp
 
 ![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
