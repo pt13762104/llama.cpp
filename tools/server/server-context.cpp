@@ -1,5 +1,6 @@
 
 #include "server-context.h"
+#include "server-chat.h"
 #include "server-common.h"
 #include "server-http.h"
 #include "server-task.h"
@@ -78,8 +79,9 @@ enum server_state {
 struct server_slot {
     int id;
 
-    // TODO: change to unique_ptrs for consistency:
     llama_context * ctx = nullptr;
+
+    common_context_seq_rm_type ctx_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
 
     // multimodal
     mtmd_context * mctx = nullptr;
@@ -89,7 +91,6 @@ struct server_slot {
     std::vector<int32_t> spec_i_batch;
     server_prompt_checkpoint spec_ckpt;
     common_speculative_ptr spec;
-
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
@@ -343,7 +344,7 @@ struct server_slot {
 
             if (!spec_draft.empty()) {
                 // we have a previous (partial) draft to reuse
-                if (task->params.speculative.use_checkpoints) {
+                if (ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
                     GGML_ASSERT(!spec_ckpt.empty());
                 }
             } else {
@@ -362,15 +363,13 @@ struct server_slot {
                     spec_draft.clear();
                 }
 
-                if (!spec_draft.empty() && params_spec.use_checkpoints) {
+                if (!spec_draft.empty() && ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
                     const auto n_tokens = prompt.tokens.size();
 
-                    auto & ckpt = spec_ckpt;
-
-                    ckpt = server_get_checkpoint(ctx, this->id, n_tokens);
+                    spec_ckpt = server_get_checkpoint(ctx, this->id, n_tokens);
 
                     SLT_DBG(*this, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %zu, size = %.3f MiB)\n",
-                            ckpt.pos_min, ckpt.pos_max, n_tokens, (float) ckpt.data.size() / 1024 / 1024);
+                            spec_ckpt.pos_min, spec_ckpt.pos_max, n_tokens, (float) spec_ckpt.data.size() / 1024 / 1024);
                 }
             }
 
@@ -871,14 +870,13 @@ private:
 
         slots.clear();
 
-        const auto spec_type = common_speculative_is_compat(ctx);
-        if (spec_type == COMMON_SPECULATIVE_COMPAT_TYPE_NO) {
+        const auto ctx_seq_rm_type = common_context_can_seq_rm(ctx);
+        if (ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
             SRV_WRN("%s", "speculative decoding not supported by this context\n");
         }
 
-        if (spec_type == COMMON_SPECULATIVE_COMPAT_TYPE_CKPT) {
+        if (ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
             SRV_WRN("%s", "speculative decoding will use checkpoints\n");
-            params_base.speculative.use_checkpoints = true;
         }
 
         // initialize slots
@@ -893,11 +891,13 @@ private:
             slot.ctx   = ctx;
             slot.n_ctx = n_ctx_slot;
 
+            slot.ctx_seq_rm_type = ctx_seq_rm_type;
+
             slot.mctx                   = mctx;
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
 
             // try speculative decoding
-            if (spec_type != COMMON_SPECULATIVE_COMPAT_TYPE_NO) {
+            if (ctx_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
                 slot.spec.reset(common_speculative_init(params_base.speculative, slot.ctx));
 
                 if (slot.spec) {
@@ -987,13 +987,13 @@ private:
 
         metrics.init();
 
-        if (params_base.clear_idle) {
+        if (params_base.cache_idle_slots) {
             if (!params_base.kv_unified) {
-                SRV_WRN("%s: --clear-idle requires --kv-unified, disabling\n", __func__);
-                params_base.clear_idle = false;
+                SRV_WRN("%s: --cache-idle-slots requires --kv-unified, disabling\n", __func__);
+                params_base.cache_idle_slots = false;
             } else if (params_base.cache_ram_mib == 0) {
-                SRV_WRN("%s: --clear-idle requires --cache-ram, disabling\n", __func__);
-                params_base.clear_idle = false;
+                SRV_WRN("%s: --cache-idle-slots requires --cache-ram, disabling\n", __func__);
+                params_base.cache_idle_slots = false;
             } else {
                 SRV_INF("%s: idle slots will be saved to prompt cache and cleared upon starting a new task\n", __func__);
                 SRV_DBG("%s", "__TEST_TAG_CLEAR_IDLE_ENABLED__\n");
@@ -1045,8 +1045,8 @@ private:
                 /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
                 /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
                 /* enable_thinking       */ enable_thinking,
-                /* reasoning_budget      */ params_base.reasoning_budget,
-                /* reasoning_budget_msg  */ params_base.reasoning_budget_message,
+                /* reasoning_budget      */ params_base.sampling.reasoning_budget_tokens,
+                /* reasoning_budget_msg  */ params_base.sampling.reasoning_budget_message,
                 /* media_path            */ params_base.media_path,
                 /* force_pure_content    */ params_base.force_pure_content_parser
             };
@@ -1886,7 +1886,7 @@ private:
                         break; // drop the task
                     }
 
-                    if (params_base.clear_idle) {
+                    if (params_base.cache_idle_slots) {
                         for (auto & s : slots) {
                             if (!s.is_processing()) {
                                 slot_save_and_clear(s);
@@ -2588,15 +2588,11 @@ private:
 
                     // make a checkpoint of the parts of the memory that cannot be rolled back.
                     // checkpoints are created only if:
+                    // - the model does not support partial sequence removal
                     // - the model uses SWA and we are not using `swa_full`
-                    // - the model architecture is marked as recurrent or hybrid
-                    //
-                    // TODO: try to make this conditional on the context or the memory module, instead of the model type
                     do_checkpoint = do_checkpoint && (
-                            llama_model_is_recurrent(model) ||
-                            llama_model_is_hybrid(model) ||
-                            (llama_model_n_swa(model) > 0 && !params_base.swa_full)
-                            );
+                            (slot.ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) ||
+                            (llama_model_n_swa(model) > 0 && !params_base.swa_full));
 
                     bool has_mtmd = false;
 
@@ -2965,8 +2961,6 @@ private:
 
                 // verify and try to accept the draft
                 {
-                    const auto & params_spec = slot.task->params.speculative;
-
                     common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
 
                     GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
@@ -2979,13 +2973,14 @@ private:
 
                     // check for partial draft acceptance
                     if (accepted.size() < slot.spec_draft.size() + 1) {
-                        if (params_spec.use_checkpoints) {
+                        if (slot.ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
                             // partial acceptance is not supported by the context -> truncate the draft and restore the state
                             slot.spec_draft = std::move(accepted);
 
-                            auto & ckpt = slot.spec_ckpt;
+                            const auto & ckpt = slot.spec_ckpt;
 
-                            SLT_DBG(slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n", ckpt.pos_min, ckpt.pos_max, ckpt.size());
+                            SLT_DBG(slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n",
+                                    ckpt.pos_min, ckpt.pos_max, ckpt.size());
 
                             const size_t n = llama_state_seq_set_data_ext(slot.ctx, ckpt.data.data(), ckpt.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                             if (n != ckpt.size()) {
@@ -3659,34 +3654,6 @@ void server_routes::init_routes() {
         return res;
     };
 
-    this->get_api_show = [this](const server_http_req &) {
-        auto res = create_response();
-        std::string tmpl_default = common_chat_templates_source(meta->chat_params.tmpls.get(), "");
-        json data = {
-            {
-                "model_info", {
-                    { "llama.context_length", meta->slot_n_ctx },
-                }
-            },
-            {"modelfile", ""},
-            {"parameters", ""},
-            {"template", tmpl_default},
-            {"details", {
-                {"parent_model", ""},
-                {"format", "gguf"},
-                {"family", ""},
-                {"families", {""}},
-                {"parameter_size", ""},
-                {"quantization_level", ""}
-            }},
-            {"model_info", ""},
-            {"capabilities", meta->has_mtmd ? json({"completion","multimodal"}) : json({"completion"})}
-        };
-
-        res->ok(data);
-        return res;
-    };
-
     this->post_infill = [this](const server_http_req & req) {
         auto res = create_response();
         // check model compatibility
@@ -3808,7 +3775,7 @@ void server_routes::init_routes() {
     this->post_responses_oai = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
-        json body = convert_responses_to_chatcmpl(json::parse(req.body));
+        json body = server_chat_convert_responses_to_chatcmpl(json::parse(req.body));
         SRV_DBG("%s\n", "Request converted: OpenAI Responses -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
@@ -3853,7 +3820,7 @@ void server_routes::init_routes() {
     this->post_anthropic_messages = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
-        json body = convert_anthropic_to_oai(json::parse(req.body));
+        json body = server_chat_convert_anthropic_to_oai(json::parse(req.body));
         SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
@@ -3871,7 +3838,7 @@ void server_routes::init_routes() {
     this->post_anthropic_count_tokens = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
-        json body = convert_anthropic_to_oai(json::parse(req.body));
+        json body = server_chat_convert_anthropic_to_oai(json::parse(req.body));
         SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
