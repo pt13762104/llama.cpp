@@ -675,6 +675,10 @@ private:
 
     int32_t n_ctx; // total context for all clients / slots
 
+    // set to llama_model_n_swa(model)
+    // if swa_full is enabled, this is set to 0 to simulate a non-SWA model
+    int32_t n_swa;
+
     // slots / clients
     std::vector<server_slot> slots;
 
@@ -719,7 +723,7 @@ private:
             return;
         }
         SLT_INF(slot, "%s", "saving idle slot to prompt cache\n");
-        SLT_DBG(slot, "%s", "__TEST_TAG_CLEAR_IDLE_SLOT__\n");
+        SLT_DBG(slot, "%s", "__TEST_TAG_CACHE_IDLE_SLOT__\n");
         slot.prompt_save(*prompt_cache);
         slot.prompt_clear(false);
         prompt_cache->update();
@@ -853,6 +857,8 @@ private:
                 SRV_WRN("%s\n", "swa_full is not supported by this model, it will be disabled");
             }
         }
+
+        n_swa = params_base.swa_full ? 0 : llama_model_n_swa(model);
 
         // Necessary similarity of prompt for slot selection
         slot_prompt_similarity = params_base.slot_prompt_similarity;
@@ -996,7 +1002,7 @@ private:
                 params_base.cache_idle_slots = false;
             } else {
                 SRV_INF("%s: idle slots will be saved to prompt cache and cleared upon starting a new task\n", __func__);
-                SRV_DBG("%s", "__TEST_TAG_CLEAR_IDLE_ENABLED__\n");
+                SRV_DBG("%s", "__TEST_TAG_CACHE_IDLE_SLOTS_ENABLED__\n");
             }
         }
 
@@ -2415,9 +2421,6 @@ private:
 
                             llama_pos pos_next = slot.prompt.tokens.pos_next(n_past);
 
-                            // note: when n_swa == 0, the model does not use SWA
-                            const auto n_swa = std::max(0, llama_model_n_swa(model));
-
                             // the largest pos_min required for a checkpoint to be useful
                             const auto pos_min_thold = std::max(0, pos_next - n_swa);
 
@@ -2589,10 +2592,10 @@ private:
                     // make a checkpoint of the parts of the memory that cannot be rolled back.
                     // checkpoints are created only if:
                     // - the model does not support partial sequence removal
-                    // - the model uses SWA and we are not using `swa_full`
+                    // - the model uses SWA (and we are not using `swa_full`)
                     do_checkpoint = do_checkpoint && (
                             (slot.ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) ||
-                            (llama_model_n_swa(model) > 0 && !params_base.swa_full));
+                            (n_swa > 0));
 
                     bool has_mtmd = false;
 
@@ -2961,7 +2964,13 @@ private:
 
                 // verify and try to accept the draft
                 {
-                    common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
+                    const bool use_ckpt = slot.ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+
+                    // only save the sampler sampler state if we use checkpoints
+                    common_sampler_ptr smpl_save;
+                    if (use_ckpt) {
+                        smpl_save.reset(common_sampler_clone(slot.smpl.get()));
+                    }
 
                     GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
                     auto accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx, slot.spec_i_batch, slot.spec_draft);
@@ -2973,7 +2982,7 @@ private:
 
                     // check for partial draft acceptance
                     if (accepted.size() < slot.spec_draft.size() + 1) {
-                        if (slot.ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
+                        if (use_ckpt) {
                             // partial acceptance is not supported by the context -> truncate the draft and restore the state
                             slot.spec_draft = std::move(accepted);
 
@@ -3801,6 +3810,7 @@ void server_routes::init_routes() {
         std::vector<raw_buffer> files;
         json body = convert_transcriptions_to_chatcmpl(
             json::parse(req.body),
+            meta->chat_params.tmpls.get(),
             req.files,
             files);
         SRV_DBG("%s\n", "Request converted: OpenAI Transcriptions -> OpenAI Chat Completions");
