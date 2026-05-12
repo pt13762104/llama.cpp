@@ -1651,7 +1651,6 @@ static void ggml_cuda_op_mul_mat_cublas(
         ggml_is_contiguous(src0) &&
         row_diff == src0->ne[1] &&
         dst->op_params[0] == GGML_PREC_DEFAULT;
-    const bool no_turing_mma = GGML_CUDA_NO_TURING_MMA && cc == GGML_CUDA_CC_TURING;
     if (supports_bf16 && src0->type == GGML_TYPE_BF16 && ggml_is_contiguous(src0) && row_diff == src0->ne[1]) {
         ggml_cuda_pool_alloc<nv_bfloat16> src1_as_bf16(ctx.pool(id));
         if (src1->type != GGML_TYPE_BF16) {
@@ -1733,8 +1732,8 @@ static void ggml_cuda_op_mul_mat_cublas(
                         &alpha_f16, src0_ptr,      CUDA_R_16F, ne00,
                                     src1_ptr,      CUDA_R_16F, ne10,
                         &beta_f16,  dst_f16.get(), CUDA_R_16F, ldc,
-                        (no_turing_mma?CUBLAS_COMPUTE_16F_PEDANTIC:CUBLAS_COMPUTE_16F),
-                        (no_turing_mma?CUBLAS_GEMM_ALGO2:CUBLAS_GEMM_DEFAULT)));
+                        CUBLAS_COMPUTE_16F,
+                        CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
             const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
             to_fp32_cuda(dst_f16.get(), dst_dd_i, row_diff*src1_ncols, stream);
@@ -1764,11 +1763,11 @@ static void ggml_cuda_op_mul_mat_cublas(
 
         CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
         CUBLAS_CHECK(
-            cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
+            cublasSgemm(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                     row_diff, src1_ncols, ne10,
-                    &alpha, src0_ddf_i,CUDA_R_32F,  ne00,
-                            src1_ddf1_i,CUDA_R_32F, ne10,
-                    &beta,  dst_dd_i, CUDA_R_32F,   ldc,CUBLAS_COMPUTE_32F,(no_turing_mma?CUBLAS_GEMM_ALGO6:CUBLAS_GEMM_DEFAULT)));
+                    &alpha, src0_ddf_i,  ne00,
+                            src1_ddf1_i, ne10,
+                    &beta,  dst_dd_i,    ldc));
     }
 
     GGML_UNUSED_VARS(dst, src1_ddq_i, src1_padded_row_size);
