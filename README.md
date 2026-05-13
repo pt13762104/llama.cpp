@@ -4,7 +4,7 @@
 
 ### It's recommended to enable this option if you only have GTX 16 cards, or GTX 16 cards with other non-Turing cards. Do not use this option if you only have RTX 20 series cards. It's up to your choice to enable this option while using both RTX 20 and GTX 16 cards. This option does nothing if you don't have Turing cards. (GTX 16 refers to any TU11x card, including e.g. T1000. RTX 20 refers to any TU10x card.)
 
-## This *may* possibly benefit Nvidia CMP users since the 32x slowdown on TCs still exists. Even though the problem is even more severe on Nvidia CMP due to the same 32x slowdown factor being applied to FP32 FMAs (not add/muls, weirdly): https://github.com/ggml-org/llama.cpp/discussions/15013#discussioncomment-16868218.
+#### This *may* possibly benefit Nvidia CMP users since the 32x slowdown on TCs still exists. Even though the problem is even more severe on Nvidia CMP due to the same 32x slowdown factor being applied to FP32 FMAs (not add/muls, weirdly): https://github.com/ggml-org/llama.cpp/discussions/15013#discussioncomment-16868218.
 
 # llama.cpp
 
