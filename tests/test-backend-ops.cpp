@@ -20,6 +20,8 @@
 #include <ggml-backend.h>
 #include <ggml-cpp.h>
 
+#include "../src/ggml-backend-impl.h"
+#include "../src/ggml-impl.h"
 #include <algorithm>
 #include <atomic>
 #include <array>
@@ -50,6 +52,120 @@
 #else
 #   define N_THREADS std::thread::hardware_concurrency()
 #endif
+
+using extra_buffer_map_t = std::unordered_map<ggml_backend_buffer_type_t, ggml_backend_buffer_t>;
+static extra_buffer_map_t load_cpu_extra_bufts() {
+    auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
+
+    std::unordered_map<ggml_backend_buffer_type_t, ggml_backend_buffer_t> extra_buf_map;
+    auto ggml_backend_dev_get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
+        ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_dev_get_extra_bufts");
+    if (ggml_backend_dev_get_extra_bufts_fn) {
+        ggml_backend_buffer_type_t * extra_bufts = ggml_backend_dev_get_extra_bufts_fn(cpu_dev);
+        while (extra_bufts && *extra_bufts) {
+            // TODO: What should the size be here? Do extra buffer types need a size even?
+            // We need to have a value larger than 0 to avoid the dummy backend buffer to be used.
+            extra_buf_map[*extra_bufts] = ggml_backend_buft_alloc_buffer(*extra_bufts, 1);
+            ++extra_bufts;
+        }
+    }
+    return extra_buf_map;
+}
+static struct ggml_tensor * ggml_dup_tensor_layout(struct ggml_context * ctx, const struct ggml_tensor * tensor) {
+    struct ggml_tensor * dup = ggml_dup_tensor(ctx, tensor);
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        dup->nb[i] = tensor->nb[i];
+    }
+    return dup;
+}
+static struct ggml_tensor * graph_copy_dup_tensor(struct ggml_hash_set hash_set, struct ggml_tensor ** node_copies,
+    struct ggml_context * ctx_allocated, struct ggml_context * ctx_unallocated, struct ggml_tensor * src) {
+
+    GGML_ASSERT(src != NULL);
+    GGML_ASSERT(src->data && "graph must be allocated");
+
+    size_t id = ggml_hash_insert(&hash_set, src);
+    if (id == GGML_HASHSET_ALREADY_EXISTS) {
+        return node_copies[ggml_hash_find(&hash_set, src)];
+    }
+
+    struct ggml_tensor * dst = ggml_dup_tensor_layout(src->data && !src->view_src ? ctx_allocated : ctx_unallocated, src);
+    if (src->view_src != NULL) {
+        dst->view_src = graph_copy_dup_tensor(hash_set, node_copies, ctx_allocated, ctx_unallocated, src->view_src);
+        dst->view_offs = src->view_offs;
+    }
+    dst->op = src->op;
+    dst->flags = src->flags;
+    memcpy(dst->op_params, src->op_params, sizeof(dst->op_params));
+    ggml_set_name(dst, src->name);
+
+    // copy src
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        struct ggml_tensor * s = src->src[i];
+        if (s == NULL) {
+            continue;
+        }
+        dst->src[i] = graph_copy_dup_tensor(hash_set, node_copies, ctx_allocated, ctx_unallocated, s);
+    }
+
+    node_copies[id] = dst;
+    return dst;
+}
+
+static void graph_copy_init_tensor(struct ggml_hash_set * hash_set, struct ggml_tensor ** node_copies, bool * node_init, struct ggml_tensor * src) {
+    size_t id = ggml_hash_find(hash_set, src);
+    if (node_init[id]) {
+        return;
+    }
+    node_init[id] = true;
+
+    struct ggml_tensor * dst = node_copies[id];
+    if (dst->view_src != NULL) {
+        graph_copy_init_tensor(hash_set, node_copies, node_init, src->view_src);
+        enum ggml_status status = ggml_backend_view_init(dst);
+        GGML_ASSERT(status == GGML_STATUS_SUCCESS);
+    }
+    else {
+        ggml_backend_tensor_copy(src, dst);
+    }
+
+    // init src
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        struct ggml_tensor * s = src->src[i];
+        if (s == NULL) {
+            continue;
+        }
+        graph_copy_init_tensor(hash_set, node_copies, node_init, s);
+    }
+}
+
+static void try_assign_extra_buffer(struct ggml_tensor * node_copy, const extra_buffer_map_t & extra_buf_map) {
+        struct ggml_tensor * src0_copy = node_copy->src[0];
+        ggml_backend_buffer_t org_buf  = src0_copy->buffer;
+
+        for (const auto& [buft, buf] : extra_buf_map) {
+            // Initialize the tensor in the extra buffer
+            if (ggml_backend_buffer_init_tensor(buf, src0_copy) != GGML_STATUS_SUCCESS) {
+                continue;
+            }
+
+            if (!src0_copy->extra) {
+                continue;
+            }
+
+            // Temporarily assign buffer so we can call ggml_backend_dev_supports_op
+            src0_copy->buffer = buf;
+
+            ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
+            // Check if extra buffer type supports the operation
+            if (dev && ggml_backend_dev_supports_op(dev, node_copy)) {
+                return;
+            } else {
+                src0_copy->buffer = org_buf; // Restore original buffer if not supported
+            }
+        }
+    }
 
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     size_t nels = ggml_nelements(tensor);
@@ -812,6 +928,98 @@ struct printer {
     virtual void print_failed_tests(const std::vector<std::string> & failed_tests) { (void) failed_tests; }
 };
 
+struct ggml_backend_graph_copy ggml_backend_graph_copy(ggml_backend_t backend, struct ggml_cgraph * graph,
+            std::unordered_map<ggml_backend_buffer_type_t, ggml_backend_buffer_t> extra_buf_map) {
+        GGML_ASSERT(graph);
+        struct ggml_hash_set hash_set = ggml_hash_set_new(graph->visited_hash_set.size);
+        struct ggml_tensor ** node_copies = (ggml_tensor **) calloc(hash_set.size, sizeof(node_copies[0])); // NOLINT
+        bool * node_init = (bool *) calloc(hash_set.size, sizeof(node_init[0]));
+
+        struct ggml_init_params params = {
+            /* .mem_size   = */ ggml_tensor_overhead()*hash_set.size + ggml_graph_overhead_custom(graph->size, false),
+            /* .mem_buffer = */ NULL,
+            /* .no_alloc   = */ true
+        };
+
+        struct ggml_context * ctx_allocated = ggml_init(params);
+        struct ggml_context * ctx_unallocated = ggml_init(params);
+
+        if (ctx_allocated == NULL || ctx_unallocated == NULL) {
+            GGML_LOG_ERROR("%s: failed to allocate context for graph copy\n", __func__);
+            ggml_hash_set_free(&hash_set);
+            free(node_copies);
+            free(node_init);
+            ggml_free(ctx_allocated);
+            ggml_free(ctx_unallocated);
+            return {
+                /* .buffer           = */ NULL,
+                /* .ctx_allocated    = */ NULL,
+                /* .ctx_unallocated  = */ NULL,
+                /* .graph            = */ NULL,
+            };
+        }
+
+        // dup nodes
+        for (int i = 0; i < graph->n_nodes; i++) {
+            struct ggml_tensor * node = graph->nodes[i];
+            graph_copy_dup_tensor(hash_set, node_copies, ctx_allocated, ctx_unallocated, node);
+        }
+
+        // allocate nodes
+        ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx_allocated, backend);
+
+        if (buffer == NULL) {
+            GGML_LOG_ERROR("%s: failed to allocate buffer for graph copy\n", __func__);
+            ggml_hash_set_free(&hash_set);
+            free(node_copies);
+            free(node_init);
+            ggml_free(ctx_allocated);
+            ggml_free(ctx_unallocated);
+            for (auto buft : extra_buf_map) {
+                ggml_backend_buffer_free(buft.second);
+            }
+            return {
+                /* .buffer           = */ NULL,
+                /* .ctx_allocated    = */ NULL,
+                /* .ctx_unallocated  = */ NULL,
+                /* .graph            = */ NULL,
+            };
+        }
+
+        // copy data and init views
+        for (int i = 0; i < graph->n_nodes; i++) {
+            struct ggml_tensor * node = graph->nodes[i];
+
+            // Handle extra buffer types (before graph_copy_init_tensor)
+            if (node->op != GGML_OP_NONE && !ggml_is_view_op(node->op) && node->src[0]) {
+                size_t id = ggml_hash_find(&hash_set, node);
+                try_assign_extra_buffer(node_copies[id], extra_buf_map);
+            }
+
+            graph_copy_init_tensor(&hash_set, node_copies, node_init, node);
+        }
+
+        // build graph copy
+        struct ggml_cgraph * graph_copy = ggml_new_graph_custom(ctx_allocated, graph->size, false);
+        for (int i = 0; i < graph->n_nodes; i++) {
+            struct ggml_tensor * node = graph->nodes[i];
+            struct ggml_tensor * node_copy = node_copies[ggml_hash_find(&hash_set, node)];
+            graph_copy->nodes[i] = node_copy;
+        }
+        graph_copy->n_nodes = graph->n_nodes;
+
+        ggml_hash_set_free(&hash_set);
+        free(node_copies);
+        free(node_init);
+
+        return {
+            /* .buffer           = */ buffer,
+            /* .ctx_allocated    = */ ctx_allocated,
+            /* .ctx_unallocated  = */ ctx_unallocated,
+            /* .graph            = */ graph_copy,
+        };
+    }
+
 struct console_printer : public printer {
     void print_test_result(const test_result & result) override {
         if (result.test_mode == "test") {
@@ -1124,7 +1332,7 @@ static void print_test_result_locked(printer * output_printer, const test_result
     std::lock_guard<std::mutex> guard(g_test_output_mutex);
     output_printer->print_test_result(result);
 }
-
+extra_buffer_map_t extra_buf_map;
 struct test_case {
     virtual ~test_case() {}
 
@@ -1524,7 +1732,10 @@ struct test_case {
         // build graph
         ggml_cgraph * gf = ggml_new_graph_custom(ctx.get(), graph_nodes, false);
         ggml_build_forward_expand(gf, out);
-
+        if (extra_buf_map.size()) {
+            auto a = ggml_backend_graph_copy(backend, gf, extra_buf_map);
+            gf = a.graph;
+        }
         // warmup run
         ggml_status status = ggml_backend_graph_compute(backend, gf);
         if (status != GGML_STATUS_SUCCESS) {
@@ -9265,13 +9476,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 2048, 16, 5, 4 }));
     test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 20000, 10, 4, 1 }));
 
-    for (int bs : {512, 1, 2, 3, 4, 5, 8}) {
-        for (ggml_type type_a : all_types) {
-            for (ggml_type type_b : {GGML_TYPE_F32}) {
+
+    for (ggml_type type_a : all_types) {
+        for (ggml_type type_b : {GGML_TYPE_F32})
+            for (int bs : {1, 2, 3, 4, 5, 8, 512}) {
                 test_cases.emplace_back(new test_mul_mat(type_a, type_b, 4096, bs, 14336, {1,  1}, {1, 1}));
             }
         }
-    }
+
 
     // qwen3-30b-a3b
     for (int bs : {1, 4, 8, 32, 64, 128, 256, 512}) {
@@ -9912,7 +10124,9 @@ int main(int argc, char ** argv) {
             n_ok++;
             continue;
         }
-
+        if(ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU)
+        extra_buf_map = load_cpu_extra_bufts();
+        else extra_buf_map.clear();
         ggml_backend_t backend = ggml_backend_dev_init(dev, NULL);
         GGML_ASSERT(backend != NULL);
 
@@ -9952,6 +10166,8 @@ int main(int argc, char ** argv) {
     if (n_ok != ggml_backend_dev_count()) {
         return 1;
     }
-
+    for (auto buft : extra_buf_map) {
+        ggml_backend_buffer_free(buft.second);
+    }
     return 0;
 }
