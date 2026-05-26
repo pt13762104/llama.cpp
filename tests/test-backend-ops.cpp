@@ -10124,9 +10124,10 @@ int main(int argc, char ** argv) {
             n_ok++;
             continue;
         }
-        if(ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU)
-        extra_buf_map = load_cpu_extra_bufts();
-        else extra_buf_map.clear();
+        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU)
+            extra_buf_map = load_cpu_extra_bufts();
+        else
+            extra_buf_map.clear();
         ggml_backend_t backend = ggml_backend_dev_init(dev, NULL);
         GGML_ASSERT(backend != NULL);
 
@@ -10152,6 +10153,11 @@ int main(int argc, char ** argv) {
             backend_status_info(ggml_backend_name(backend), ok ? test_status_t::OK : test_status_t::FAIL));
 
         ggml_backend_free(backend);
+
+        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU)
+            for (auto buft : extra_buf_map) {
+                ggml_backend_buffer_free(buft.second);
+            }
     }
 
     ggml_quantize_free();
@@ -10166,8 +10172,6 @@ int main(int argc, char ** argv) {
     if (n_ok != ggml_backend_dev_count()) {
         return 1;
     }
-    for (auto buft : extra_buf_map) {
-        ggml_backend_buffer_free(buft.second);
-    }
+
     return 0;
 }
