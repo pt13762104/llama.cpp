@@ -928,7 +928,7 @@ struct printer {
     virtual void print_failed_tests(const std::vector<std::string> & failed_tests) { (void) failed_tests; }
 };
 
-struct ggml_backend_graph_copy ggml_backend_graph_copy(ggml_backend_t backend, struct ggml_cgraph * graph,
+static struct ggml_backend_graph_copy ggml_backend_graph_copy(ggml_backend_t backend, struct ggml_cgraph * graph,
             std::unordered_map<ggml_backend_buffer_type_t, ggml_backend_buffer_t> extra_buf_map) {
         GGML_ASSERT(graph);
         struct ggml_hash_set hash_set = ggml_hash_set_new(graph->visited_hash_set.size);
