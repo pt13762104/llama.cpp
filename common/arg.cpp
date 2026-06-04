@@ -353,7 +353,6 @@ static handle_model_result common_params_handle_model(struct common_params_model
             model.path = "";
         }
         common_download_opts hf_opts = opts;
-        hf_opts.download_mmproj = true; // also look for mmproj when downloading hf model
         auto download_result = common_download_model(model, hf_opts);
 
         if (download_result.model_path.empty()) {
@@ -441,10 +440,11 @@ bool common_params_handle_models(common_params & params, llama_example curr_ex) 
                                          COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 
     common_download_opts opts;
-    opts.bearer_token  = params.hf_token;
-    opts.offline       = params.offline;
-    opts.skip_download = params.skip_download;
-    opts.download_mtp  = spec_type_draft_mtp;
+    opts.bearer_token    = params.hf_token;
+    opts.offline         = params.offline;
+    opts.skip_download   = params.skip_download;
+    opts.download_mtp    = spec_type_draft_mtp;
+    opts.download_mmproj = !params.no_mmproj;
 
     try {
         auto res = common_params_handle_model(params.model, opts);
@@ -3028,6 +3028,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TIMEOUT"));
     add_opt(common_arg(
+        {"--sse-ping-interval"}, "N",
+        string_format("server SSE ping interval in seconds (-1 = disabled, default: %d)", params.sse_ping_interval),
+        [](common_params & params, int value) {
+            params.sse_ping_interval = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SSE_PING_INTERVAL"));
+    add_opt(common_arg(
         {"--threads-http"}, "N",
         string_format("number of threads used to process HTTP requests (default: %d)", params.n_threads_http),
         [](common_params & params, int value) {
@@ -4077,7 +4084,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.sampling.top_k = 0;
             params.sampling.min_p = 0.01f;
             params.use_jinja = true;
-            //params.default_template_kwargs["reasoning_effort"] = "\"high\"";
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
@@ -4096,7 +4102,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.sampling.top_k = 0;
             params.sampling.min_p = 0.01f;
             params.use_jinja = true;
-            //params.default_template_kwargs["reasoning_effort"] = "\"high\"";
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
